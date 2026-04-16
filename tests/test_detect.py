@@ -236,3 +236,56 @@ def test_detect_video_not_in_words(tmp_path):
     result = detect(tmp_path)
     # Only video file present — total_words should be 0
     assert result["total_words"] == 0
+
+
+# --- detect_incremental list[Path] tests (US1 + US2) ---
+
+def test_detect_incremental_single_path_behaves_as_before(tmp_path):
+    """Single Path argument to detect_incremental must behave identically to pre-change."""
+    from graphify.detect import detect_incremental, detect
+    (tmp_path / "main.py").write_text("def foo(): pass")
+    # No manifest — all files treated as new
+    result = detect_incremental(tmp_path)
+    direct = detect(tmp_path)
+    assert result["incremental"] is True
+    assert result["total_files"] == direct["total_files"]
+    assert result.get("new_total", 0) == result["total_files"]
+
+
+def test_detect_incremental_list_merges_results(tmp_path):
+    """list[Path] merges file dicts and deleted_files across roots."""
+    from graphify.detect import detect_incremental
+    repo_a = tmp_path / "repo_a"
+    repo_b = tmp_path / "repo_b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    (repo_a / "a.py").write_text("x = 1")
+    (repo_b / "b.py").write_text("y = 2")
+    result = detect_incremental([repo_a, repo_b])
+    assert result["incremental"] is True
+    all_files = [f for files in result["files"].values() for f in files]
+    assert any("a.py" in f for f in all_files)
+    assert any("b.py" in f for f in all_files)
+    assert result["total_files"] == 2
+
+
+def test_detect_incremental_list_union_deleted(tmp_path):
+    """Deleted files from each root are unioned."""
+    import json
+    from graphify.detect import detect_incremental, save_manifest, detect
+    repo_a = tmp_path / "repo_a"
+    repo_a.mkdir()
+    py_file = repo_a / "gone.py"
+    py_file.write_text("x = 1")
+    # Save manifest with the file present
+    manifest_dir = repo_a / "graphify-out"
+    manifest_dir.mkdir()
+    manifest_path = str(manifest_dir / "manifest.json")
+    full = detect(repo_a)
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps({str(py_file): py_file.stat().st_mtime - 1})
+    )
+    # Now delete the file
+    py_file.unlink()
+    result = detect_incremental([repo_a])
+    assert str(py_file) in result["deleted_files"]

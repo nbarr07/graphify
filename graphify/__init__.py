@@ -19,6 +19,13 @@ def __getattr__(name):
         "to_svg": ("graphify.export", "to_svg"),
         "to_canvas": ("graphify.export", "to_canvas"),
         "to_wiki": ("graphify.wiki", "to_wiki"),
+        "multi_repo_detect": ("graphify.multi", "multi_repo_detect"),
+        "discover_cross_repo_edges": ("graphify.multi", "discover_cross_repo_edges"),
+        "save_meta_graph": ("graphify.multi", "save_meta_graph"),
+        "load_meta_graph": ("graphify.multi", "load_meta_graph"),
+        "parse_repos_yaml": ("graphify.multi", "parse_repos_yaml"),
+        "merge_graphs": ("graphify.build", "merge_graphs"),
+        "prune_deleted": ("graphify.build", "prune_deleted"),
     }
     if name in _map:
         import importlib
