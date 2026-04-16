@@ -1,0 +1,26 @@
+# Multi-repository configuration for documentation generation
+# Repositories listed here can be referenced across all documentation
+
+repos:
+  # Service repositories (generate documentation)
+  radar-service:
+    url: https://github.com/nscaledev/radar-service
+    path: ./radar-service
+  radar-ingest-service:
+    url: https://github.com/nscaledev/radar-ingest-service
+    path: ./radar-ingest-service
+  fleet-manager:
+    url: https://github.com/nscaledev/fleet-manager
+    path: ./fleet-manager
+  # Infrastructure repositories (reference only - for deployment, observability docs)
+  k8s-deploy-observability:
+    url: https://github.com/nscaledev/k8s-deploy-observability
+    path: ./k8s-deploy-observability
+  k8s-cluster-observability:
+    url: https://github.com/nscaledev/k8s-cluster-observability
+    path: ./k8s-cluster-observability
+
+# Usage:
+# - Documentation agents will generate docs for radar-service and radar-ingest-service
+# - All four repos can be referenced in documentation (e.g., linking to alert definitions in k8s-deploy-observability)
+# - Agents will detect GitOps patterns from k8s-deploy-* repos and document accordingly
