@@ -2,6 +2,15 @@
 
 Full release notes with details on each version: [GitHub Releases](https://github.com/safishamsi/graphify/releases)
 
+## 0.4.17 (2026-04-16)
+
+- Feat: Multi-repo federated graph support — add `repos.yaml` at workspace root to build per-repo graphs and a workspace-level `meta-graph.json` with cross-repo edges discovered via four heuristics (import patterns, shared types, Helm/K8s refs, ArgoCD app-of-apps)
+- Feat: Auto-detect incremental mode — `graphify .` automatically uses `detect_incremental()` when `graphify-out/graph.json` exists; no `--update` flag required (flag still works as an explicit override)
+- Feat: Ghost-node pruning — incremental runs automatically remove nodes from deleted files via `prune_deleted()` before merging new extractions
+- Feat: New public API — `graphify.multi_repo_detect`, `graphify.discover_cross_repo_edges`, `graphify.save_meta_graph`, `graphify.load_meta_graph`, `graphify.parse_repos_yaml`, `graphify.merge_graphs`, `graphify.prune_deleted`
+- Feat: `detect_incremental()` now accepts `Path | list[Path]` for multi-root incremental detection (single-path callers unchanged)
+- Dep: Added `pyyaml` as a core dependency (for `repos.yaml` parsing)
+
 ## 0.4.16 (2026-04-16)
 
 - Fix: graphify watch crashed on all platforms with NameError because import sys was missing from watch.py (#386, #394)

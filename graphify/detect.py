@@ -465,12 +465,19 @@ def save_manifest(files: dict[str, list[str]], manifest_path: str = _MANIFEST_PA
     Path(manifest_path).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
-def detect_incremental(root: Path, manifest_path: str = _MANIFEST_PATH) -> dict:
+def detect_incremental(root: "Path | list[Path]", manifest_path: str = _MANIFEST_PATH) -> dict:
     """Like detect(), but returns only new or modified files since the last run.
 
     Compares current file mtimes against the stored manifest.
     Use for --update mode: re-extract only what changed, merge into existing graph.
+
+    root may be a single Path (existing behaviour, unchanged) or a list[Path]
+    for multi-repo workspaces. When a list is provided, results are merged across
+    all roots and deleted_files is the union across all manifests.
     """
+    if isinstance(root, list):
+        return _detect_incremental_multi(root)
+
     full = detect(root)
     manifest = load_manifest(manifest_path)
 
@@ -508,3 +515,36 @@ def detect_incremental(root: Path, manifest_path: str = _MANIFEST_PATH) -> dict:
     full["new_total"] = new_total
     full["deleted_files"] = deleted_files
     return full
+
+
+def _detect_incremental_multi(roots: "list[Path]") -> dict:
+    """Merge detect_incremental results across multiple repo roots."""
+    file_categories: set[str] = set()
+    merged_files: dict[str, list[str]] = {}
+    merged_new: dict[str, list[str]] = {}
+    merged_unchanged: dict[str, list[str]] = {}
+    merged_deleted: list[str] = []
+    total_files = 0
+    new_total = 0
+
+    for root in roots:
+        manifest_path = str(root / _MANIFEST_PATH)
+        result = detect_incremental(root, manifest_path=manifest_path)
+        for cat, files in result.get("files", {}).items():
+            file_categories.add(cat)
+            merged_files.setdefault(cat, []).extend(files)
+            merged_new.setdefault(cat, []).extend(result.get("new_files", {}).get(cat, []))
+            merged_unchanged.setdefault(cat, []).extend(result.get("unchanged_files", {}).get(cat, []))
+        merged_deleted.extend(result.get("deleted_files", []))
+        total_files += result.get("total_files", 0)
+        new_total += result.get("new_total", 0)
+
+    return {
+        "files": merged_files,
+        "new_files": merged_new,
+        "unchanged_files": merged_unchanged,
+        "deleted_files": merged_deleted,
+        "total_files": total_files,
+        "new_total": new_total,
+        "incremental": True,
+    }

@@ -66,6 +66,50 @@ def build_from_json(extraction: dict, *, directed: bool = False) -> nx.Graph:
     return G
 
 
+def prune_deleted(G: nx.Graph, deleted_files: list[str]) -> tuple[nx.Graph, list[str]]:
+    """Remove nodes whose source_file attribute is in deleted_files.
+
+    Modifies G in-place and returns (G, removed_node_ids).
+    If deleted_files is empty, returns (G, []) with no changes.
+    """
+    if not deleted_files:
+        return G, []
+    deleted_set = set(deleted_files)
+    to_remove = [
+        n for n, attrs in G.nodes(data=True)
+        if attrs.get("source_file") in deleted_set
+    ]
+    G.remove_nodes_from(to_remove)
+    return G, to_remove
+
+
+def merge_graphs(
+    graphs: list[tuple[str, nx.Graph]],
+    cross_edges: list[dict] | None = None,
+) -> nx.Graph:
+    """Build a transient combined graph with repo-prefixed node IDs.
+
+    Prefixes every node ID with '{repo_name}::' to avoid collisions.
+    cross_edges should use the same '{repo_name}::{node_id}' format.
+    The returned graph is for analysis only — do not persist it to disk.
+    """
+    combined: nx.Graph = nx.Graph()
+    for repo_name, G in graphs:
+        for node_id, attrs in G.nodes(data=True):
+            prefixed = f"{repo_name}::{node_id}"
+            combined.add_node(prefixed, **attrs, _repo=repo_name)
+        for src, tgt, attrs in G.edges(data=True):
+            combined.add_edge(f"{repo_name}::{src}", f"{repo_name}::{tgt}", **attrs)
+    if cross_edges:
+        for edge in cross_edges:
+            src = edge.get("source", "")
+            tgt = edge.get("target", "")
+            if src and tgt:
+                attrs = {k: v for k, v in edge.items() if k not in ("source", "target")}
+                combined.add_edge(src, tgt, **attrs)
+    return combined
+
+
 def build(extractions: list[dict], *, directed: bool = False) -> nx.Graph:
     """Merge multiple extraction results into one graph.
 

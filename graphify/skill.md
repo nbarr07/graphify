@@ -82,7 +82,29 @@ If the import succeeds, print nothing and move straight to Step 2.
 
 **In every subsequent bash block, replace `python3` with `$(cat graphify-out/.graphify_python)` to use the correct interpreter.**
 
+### Step 1.5 - Auto-detect mode
+
+Before running detection, check whether an existing graph is present:
+
+```bash
+if [ -f graphify-out/graph.json ]; then
+    echo "UPDATE_MODE"
+else
+    echo "FRESH_MODE"
+fi
+```
+
+- **UPDATE_MODE** (`graphify-out/graph.json` exists): use `detect_incremental()` in Step 2.
+  This is the default for any repo that has been graphified before — no `--update` flag needed.
+  The `--update` flag continues to work as an explicit override (same behaviour).
+- **FRESH_MODE** (no existing graph): use `detect()` in Step 2.
+
+Also check for a workspace `repos.yaml`. If present, run the **Multi-Repo Pipeline** (see below)
+instead of the standard single-repo pipeline.
+
 ### Step 2 - Detect files
+
+**If FRESH_MODE:**
 
 ```bash
 $(cat graphify-out/.graphify_python) -c "
@@ -93,6 +115,43 @@ result = detect(Path('INPUT_PATH'))
 print(json.dumps(result))
 " > graphify-out/.graphify_detect.json
 ```
+
+**If UPDATE_MODE:**
+
+```bash
+$(cat graphify-out/.graphify_python) -c "
+import json
+from graphify.detect import detect_incremental
+from pathlib import Path
+result = detect_incremental(Path('INPUT_PATH'))
+print(json.dumps(result, default=str))
+" > graphify-out/.graphify_detect.json
+```
+
+Then, if UPDATE_MODE and `deleted_files` is non-empty, prune ghost nodes:
+
+```bash
+$(cat graphify-out/.graphify_python) -c "
+import json
+import networkx as nx
+from networkx.readwrite import json_graph
+from pathlib import Path
+from graphify.build import prune_deleted
+
+detect = json.loads(Path('graphify-out/.graphify_detect.json').read_text())
+deleted = detect.get('deleted_files', [])
+if deleted and Path('graphify-out/graph.json').exists():
+    data = json.loads(Path('graphify-out/graph.json').read_text())
+    G = json_graph.node_link_graph(data)
+    G, removed = prune_deleted(G, deleted)
+    Path('graphify-out/graph.json').write_text(
+        json.dumps(json_graph.node_link_data(G)), encoding='utf-8'
+    )
+    print(json.dumps({'pruned': len(removed), 'ids': removed[:10]}))
+"
+```
+
+Report pruned count to user if any nodes were removed: `Pruned N ghost node(s) from deleted files.`
 
 Replace INPUT_PATH with the actual path the user provided. Do NOT cat or print the JSON - read it silently and present a clean summary instead:
 
@@ -768,6 +827,102 @@ Then immediately offer to explore. Pick the single most interesting suggested qu
 If the user says yes, run `/graphify query "[question]"` on the graph and walk them through the answer using the graph structure - which nodes connect, which community boundaries get crossed, what the path reveals. Keep going as long as they want to explore. Each answer should end with a natural follow-up ("this connects to X - want to go deeper?") so the session feels like navigation, not a one-shot report.
 
 The graph is the map. Your job after the pipeline is to be the guide.
+
+---
+
+## Multi-Repo Pipeline
+
+Run this pipeline **instead of** the standard single-repo pipeline when a `repos.yaml`
+file is found in the workspace root (checked in Step 1.5).
+
+### MR-1 - Parse repos.yaml
+
+```bash
+$(cat graphify-out/.graphify_python) -c "
+import json
+from pathlib import Path
+from graphify.multi import parse_repos_yaml
+repos = parse_repos_yaml(Path('.'))
+print(json.dumps(repos))
+" > graphify-out/.graphify_repos.json
+```
+
+Print a summary: `Multi-repo workspace: N repos found (name1, name2, ...)`.
+
+### MR-2 - Per-repo graph build (incremental or fresh)
+
+For each repo in `.graphify_repos.json`, run the standard single-repo pipeline
+(Steps 1.5 through Step 9) with `INPUT_PATH` set to that repo's path.
+Each repo's outputs go to `{repo_path}/graphify-out/`.
+
+Run repos sequentially (to avoid token cost overruns) or in parallel subagents
+if the user explicitly requests speed.
+
+### MR-3 - Discover cross-repo edges
+
+```bash
+$(cat graphify-out/.graphify_python) -c "
+import json, networkx as nx
+from networkx.readwrite import json_graph
+from pathlib import Path
+from graphify.multi import discover_cross_repo_edges
+
+repos = json.loads(Path('graphify-out/.graphify_repos.json').read_text())
+repo_graphs = {}
+for name, config in repos.items():
+    graph_path = Path(config['path']) / 'graphify-out' / 'graph.json'
+    if graph_path.exists():
+        data = json.loads(graph_path.read_text())
+        repo_graphs[name] = json_graph.node_link_graph(data)
+
+edges = discover_cross_repo_edges(repo_graphs)
+print(json.dumps(edges))
+" > graphify-out/.graphify_cross_edges.json
+```
+
+### MR-4 - Present edges for user validation
+
+Read `.graphify_cross_edges.json` and present each discovered edge to the user:
+
+```
+Cross-repo edges discovered (N total):
+
+  [1] radar-service::ServiceClient → fleet-manager:: (imports, score: 0.80, via: import_pattern)
+  [2] radar-service::FleetAPI → fleet-manager::FleetAPI (uses, score: 0.65, via: shared_type)
+  ...
+
+Accept all? (y) or review individually? (r) or skip all? (s)
+```
+
+- If user accepts all → pass all edges to MR-5.
+- If user reviews individually → show each edge and collect y/n per edge.
+- If user skips all → write empty `cross_edges: []` and proceed.
+- If zero edges found → skip this step, write empty `cross_edges: []` automatically.
+
+### MR-5 - Save meta-graph
+
+```bash
+$(cat graphify-out/.graphify_python) -c "
+import json
+from pathlib import Path
+from graphify.multi import save_meta_graph, multi_repo_detect
+
+repos_config = json.loads(Path('graphify-out/.graphify_repos.json').read_text())
+validated_edges = json.loads(Path('graphify-out/.graphify_cross_edges.json').read_text())
+# repos_info stub for save_meta_graph (paths already resolved)
+repos_info = {'repos': {
+    name: {
+        'path': Path(cfg['path']),
+        'graph_path': Path(cfg['path']) / 'graphify-out' / 'graph.json',
+    }
+    for name, cfg in repos_config.items()
+}}
+save_meta_graph(repos_info, validated_edges, Path('graphify-out/meta-graph.json'))
+print('meta-graph.json written')
+"
+```
+
+Report: `Meta-graph saved: N cross-repo edges → graphify-out/meta-graph.json`
 
 ---
 
